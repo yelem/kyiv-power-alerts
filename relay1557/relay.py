@@ -37,7 +37,12 @@ items = [
 req = urllib.request.Request(
     os.environ["RELAY_URL"],
     data=json.dumps({"messages": items}).encode(),
-    headers={"Content-Type": "application/json", "Authorization": f"Bearer {os.environ['RELAY_SECRET']}"},
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.environ['RELAY_SECRET']}",
+        # Cloudflare rejects the default "Python-urllib" user agent (error 1010)
+        "User-Agent": "kyiv-power-alerts-relay",
+    },
 )
 with urllib.request.urlopen(req, timeout=30) as r:
     print(r.read().decode())
