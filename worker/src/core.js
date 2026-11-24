@@ -101,9 +101,15 @@ export function parseDay(d) {
   return { date: d.date.slice(0, 10), iso: d.date, status: d.status ?? null, outages };
 }
 
-// [[title, day], ...] for today and tomorrow
-export const parseGroup = (g) =>
-  [["сьогодні", parseDay(g.today)], ["завтра", parseDay(g.tomorrow)]].filter(([, d]) => d);
+// [[title, day], ...] for today and tomorrow. Titles come from the real date, not from
+// Yasno's "today"/"tomorrow" keys: around midnight Yasno (its cache) sometimes still
+// serves yesterday's response, and such past days are dropped.
+export function parseGroup(g, now) {
+  const today = kyiv(now).date;
+  return [parseDay(g.today), parseDay(g.tomorrow)]
+    .filter((d) => d && d.date >= today)
+    .map((d) => [d.date === today ? "сьогодні" : "завтра", d]);
+}
 
 // Absolute [start, end] timestamps of definite outages, merged over midnight.
 export function intervals(days) {
@@ -164,12 +170,14 @@ export function fmtDay(day, title, group, hint, heading) {
  * Returns {messages: [html, ...], state: newState}.
  */
 export function buildCheck(state, g, group, now, remindMin) {
-  const parsed = parseGroup(g);
+  const parsed = parseGroup(g, now);
   const days = parsed.map(([, d]) => d);
   const prev = state.days || {};
   const today = kyiv(now).date;
   const hint = nowHint(days, now);
-  const newDays = {};
+  // keep current days that this response lacks (a stale response must not erase them,
+  // or they would be announced again as new once fresh data comes back)
+  const newDays = Object.fromEntries(Object.entries(prev).filter(([d]) => d >= today));
   const ch = { emergency: [], ended: [], fresh: [], other: [] };
 
   for (const [title, day] of parsed) {
@@ -248,7 +256,7 @@ export function commandReply(cmd, g, group, now) {
   if (!["/status", "/today", "/tomorrow"].includes(cmd)) return null;
   if (!g) return NODATA;
 
-  const parsed = parseGroup(g);
+  const parsed = parseGroup(g, now);
   const days = parsed.map(([, d]) => d);
   const get = (title) => parsed.find(([t]) => t === title)?.[1];
 
