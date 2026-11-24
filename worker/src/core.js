@@ -13,6 +13,8 @@ export const isEmergency = (s) => s != null && s !== APPLIES && s !== WAITING;
 
 const pad = (n) => String(n).padStart(2, "0");
 const hhmm = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+// red circle at the time power goes off, green at the time it comes back
+const span = (off, on) => `🔴 ${off} – 🟢 ${on}`;
 const ddmm = (date) => `${date.slice(8, 10)}.${date.slice(5, 7)}`;
 
 export const esc = (s) =>
@@ -79,7 +81,10 @@ export function nowHint(days, now) {
   const at = (ts) => (kyiv(ts).date === today ? "о " : "завтра о ") + kyiv(ts).time;
   const iv = intervals(days);
   const cur = iv.find(([s, e]) => s <= now && now < e);
-  if (cur) return `За графіком зараз світла немає, увімкнуть ${at(cur[1])}.`;
+  if (cur) {
+    const back = kyiv(cur[1] - 1).date === today ? `о ${endTime(cur[1])}` : at(cur[1]);
+    return `За графіком зараз світла немає, увімкнуть ${back}.`;
+  }
   const next = iv.find(([s]) => s > now);
   if (next) return `За графіком зараз світло є, наступне відключення ${at(next[0])}.`;
   return "За графіком зараз світло є, відключень більше не заплановано.";
@@ -89,7 +94,7 @@ function outageLines(outages) {
   if (!outages.length) return ["Відключень не заплановано."];
   const lines = ["Без світла:"];
   for (const [a, b, t] of outages)
-    lines.push(`    ${hhmm(a)} – ${hhmm(b)}${t === "Definite" ? "" : " (можливо)"}`);
+    lines.push(`    ${span(hhmm(a), hhmm(b))}${t === "Definite" ? "" : " (можливо)"}`);
   const off = outages.filter((o) => o[2] === "Definite").reduce((s, [a, b]) => s + b - a, 0);
   if (off) lines.push("", `Разом ${dur(off)} без світла`);
   return lines;
@@ -138,7 +143,7 @@ export function buildCheck(state, g, group, now, remindMin) {
         ch.other.push(
           fmtDay(day, title, group, h, `Графік на ${title}, ${dm} змінився`) +
             "\n\nБуло: " + (old.outages.length
-              ? old.outages.map(([a, b]) => `${hhmm(a)} – ${hhmm(b)}`).join(", ")
+              ? old.outages.map(([a, b]) => span(hhmm(a), hhmm(b))).join(", ")
               : "без відключень"),
         );
     }
@@ -163,7 +168,7 @@ export function buildCheck(state, g, group, now, remindMin) {
         reminded.push(key);
         messages.push(
           `<b>Через ${Math.round(left)} хв відключення світла</b>\n` +
-            `${kyiv(s).time} – ${endTime(e)}, ${dur((e - s) / MIN)}`,
+            `${span(kyiv(s).time, endTime(e))}, ${dur((e - s) / MIN)}`,
         );
       }
     }
@@ -224,7 +229,7 @@ export function commandReply(cmd, g, group, now, notices = []) {
   const rest = intervals(days).filter(([s, e]) => e > now && kyiv(Math.max(s, now)).date === today);
   if (rest.length)
     lines.push("", "Ще сьогодні без світла:",
-      ...rest.map(([s, e]) => `    ${s <= now ? "зараз" : kyiv(s).time} – ${endTime(e)}`));
+      ...rest.map(([s, e]) => `    ${span(s <= now ? "зараз" : kyiv(s).time, endTime(e))}`));
   const t = get("завтра");
   lines.push(
     "",
