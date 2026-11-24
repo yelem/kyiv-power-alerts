@@ -200,6 +200,15 @@ export const fmtNotice = (n) => {
   return `<b>ДІМ.1557</b>, ${ddmm(t.date)} ${t.time}\n\n${esc(n.text)}`;
 };
 
+// 1557 answers "...відсутні зафіксовані аварійні ситуації..." when everything is fine
+const noAccidents = (text) => /відсутні\s+зафіксовані/i.test(text);
+
+export function fmtStatus(text, since) {
+  const t = kyiv(since * 1000);
+  const head = noAccidents(text) ? "🟢 ДІМ.1557: аварій за адресою немає" : "🔴 ДІМ.1557: аварія за адресою";
+  return `<b>${head}</b>\n${ddmm(t.date)} ${t.time}\n\n${esc(text)}`;
+}
+
 // ---- commands ----
 
 export const COMMANDS = [
@@ -217,12 +226,15 @@ const HELP =
 
 const NODATA = "Не вдалося отримати дані Yasno, спробуйте трохи пізніше.";
 
-export function commandReply(cmd, g, group, now, notices = []) {
+export function commandReply(cmd, g, group, now, notices = [], status = null) {
   if (cmd === "/help" || cmd === "/start") return HELP;
-  if (cmd === "/dim1557")
-    return notices.length
-      ? notices.slice(0, 3).map(fmtNotice).join("\n\n— — —\n\n")
-      : "Повідомлень від ДІМ.1557 ще не було.";
+  if (cmd === "/dim1557") {
+    const parts = [];
+    if (status) parts.push(fmtStatus(status.text, status.since).replace(/\n/, "\nбез змін з "));
+    else parts.push("ДІМ.1557 ще не перевірявся, перша перевірка – протягом 10 хв.");
+    if (notices.length) parts.push(...notices.slice(0, 2).map(fmtNotice));
+    return parts.join("\n\n— — —\n\n");
+  }
   if (!["/status", "/today", "/tomorrow"].includes(cmd)) return null;
   if (!g) return NODATA;
 
@@ -252,6 +264,9 @@ export function commandReply(cmd, g, group, now, notices = []) {
       : isEmergency(t.status) ? "На завтра оголошено аварійні відключення."
       : "Графік на завтра: /tomorrow",
   );
-  if (notices.length) lines.push(`Останнє від ДІМ.1557 (${ddmm(kyiv(notices[0].date * 1000).date)}): /dim1557`);
+  if (status)
+    lines.push(noAccidents(status.text)
+      ? "ДІМ.1557: аварій за адресою немає"
+      : "ДІМ.1557: є аварія за адресою, деталі /dim1557");
   return lines.join("\n");
 }

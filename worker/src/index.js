@@ -1,4 +1,4 @@
-import { API, COMMANDS, buildCheck, commandReply, fmtNotice } from "./core.js";
+import { API, COMMANDS, buildCheck, commandReply, fmtNotice, fmtStatus } from "./core.js";
 
 // Secrets: TELEGRAM_BOT_TOKEN, CHAT_ID, GROUP, WEBHOOK_SECRET, RELAY_SECRET
 // Optional: ALLOWED_CHATS (comma-separated extra chat ids for commands), REMIND_MINUTES
@@ -60,12 +60,12 @@ async function handleUpdate(u, env) {
     }
   }
   const dim = (await env.KV.get("dim1557", "json")) || {};
-  const text = commandReply(cmd, g, env.GROUP, Date.now(), dim.notices || []);
+  const text = commandReply(cmd, g, env.GROUP, Date.now(), dim.notices || [], dim.status);
   if (text) await send(env, msg.chat.id, text);
 }
 
 async function relay1557(req, env) {
-  const { messages = [] } = await req.json();
+  const { messages = [], status = null } = await req.json();
   const st = (await env.KV.get("dim1557", "json")) || { seen: [], notices: [] };
   const before = JSON.parse(JSON.stringify(st));
   const first = !st.init; // first sync: remember existing messages without posting them
@@ -75,11 +75,20 @@ async function relay1557(req, env) {
     st.seen.push(m.id);
     st.notices.unshift(m);
   }
+
+  // answer of "Аварії за адресами": post only when it changes (not on the very first one)
+  let statusChanged = false;
+  if (status && status.trim() !== st.status?.text) {
+    const now = Math.floor(Date.now() / 1000);
+    if (st.status) await send(env, env.CHAT_ID, fmtStatus(status.trim(), now));
+    st.status = { text: status.trim(), since: now };
+    statusChanged = true;
+  }
   st.init = true;
   st.seen = st.seen.slice(-300);
   st.notices = st.notices.slice(0, 10);
   if (changed(st, before)) await env.KV.put("dim1557", JSON.stringify(st));
-  return Response.json({ received: messages.length, sent: first ? 0 : fresh.length });
+  return Response.json({ received: messages.length, sent: first ? 0 : fresh.length, statusChanged });
 }
 
 async function setup(req, env) {
