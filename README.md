@@ -1,27 +1,38 @@
 # Kyiv power alerts
 
-Следит за графиком отключений света в Киеве (данные Yasno / ДТЕК) для одной группы
-и пишет в Telegram:
+Watches the Kyiv power outage schedule (Yasno / DTEK data) for one outage group
+and posts to a Telegram chat when:
 
-- 🗓 когда публикуется график на сегодня/завтра;
-- 🔄 когда график меняется (с тем, что было раньше);
-- ⏰ за 30 минут до отключения.
+- the schedule for today or tomorrow is published;
+- the schedule changes (the message includes the previous version);
+- emergency shutdowns are announced and the schedule stops applying, and when they end;
+- an outage is about to start (30 minutes ahead by default).
 
-Работает в GitHub Actions каждые 10 минут, без сервера. Состояние хранится в `state.json`.
+Messages are in Ukrainian. Runs on GitHub Actions every 10 minutes, no server needed.
+The last seen schedule is stored in `state.json`.
 
-## Настройка
+## Setup
 
 Settings → Secrets and variables → Actions:
 
-| Тип | Имя | Значение |
+| Kind | Name | Value |
 |---|---|---|
-| Secret | `TELEGRAM_BOT_TOKEN` | токен бота от @BotFather |
-| Secret | `TELEGRAM_CHAT_ID` | id чата (для групп начинается с `-100…`) |
-| Variable | `GROUP` | группа, например `3.1` |
-| Variable | `REMIND_MINUTES` | необязательно, по умолчанию `30`; `0` — без напоминаний |
+| Secret | `TELEGRAM_BOT_TOKEN` | bot token from @BotFather |
+| Secret | `TELEGRAM_CHAT_ID` | chat id (group chats start with `-100`) |
+| Variable | `GROUP` | outage group, e.g. `3.1` |
+| Variable | `REMIND_MINUTES` | optional, default `30`; `0` disables reminders |
 
-Проверить локально без отправки:
+Then enable the `check` workflow in the Actions tab.
+
+## Local run
+
+Prints messages instead of sending them:
 
 ```
 GROUP=3.1 DRY_RUN=1 python check.py
 ```
+
+## Data source
+
+`https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages`
+(unofficial API, may change without notice).

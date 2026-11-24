@@ -24,10 +24,13 @@ GROUP = os.environ.get("GROUP", "").strip()
 REMIND_MIN = int(os.environ.get("REMIND_MINUTES") or 30)
 DRY_RUN = bool(os.environ.get("DRY_RUN"))
 
-STATUS_TEXT = {
-    "WaitingForSchedule": "⏳ график ещё не опубликован",
-    "EmergencyShutdowns": "⚠️ аварийные отключения — график не действует",
-}
+APPLIES = "ScheduleApplies"
+WAITING = "WaitingForSchedule"
+
+
+def is_emergency(status):
+    # "EmergencyShutdowns" or any other unknown status means the schedule is not in effect
+    return status not in (APPLIES, WAITING, None)
 
 
 def fetch():
@@ -38,6 +41,10 @@ def fetch():
 
 def hhmm(m):
     return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def ddmm(date):
+    return datetime.fromisoformat(date).strftime("%d.%m")
 
 
 def parse_day(d):
@@ -58,32 +65,60 @@ def parse_day(d):
 
 def fmt_outages(outages):
     if not outages:
-        return ["✅ отключений нет"]
+        return ["Відключень немає."]
     lines = []
     for a, b, t in outages:
-        mark = "🔴" if t == "Definite" else "🟡 возможно"
-        lines.append(f"{mark} {hhmm(a)}–{hhmm(b)}")
+        lines.append(f"  {hhmm(a)}–{hhmm(b)}" + ("" if t == "Definite" else " (можливо)"))
     off = sum(b - a for a, b, t in outages if t == "Definite")
     if off:
         h, m = divmod(off, 60)
-        lines.append(f"Без света: {h} ч" + (f" {m} мин" if m else ""))
+        lines.append(f"Без світла: {h} год" + (f" {m} хв" if m else ""))
     return lines
 
 
 def fmt_day(day, title):
-    d = datetime.fromisoformat(day["date"])
-    lines = [f"<b>{title}, {d:%d.%m}</b> (группа {GROUP})"]
-    if day["status"] != "ScheduleApplies":
-        lines.append(STATUS_TEXT.get(day["status"], f"статус: {day['status']}"))
-    if day["status"] == "ScheduleApplies" or day["outages"]:
-        lines += fmt_outages(day["outages"])
-    return "\n".join(lines)
+    head = f"<b>{title}, {ddmm(day['date'])}</b> (група {GROUP})"
+    return "\n".join([head] + fmt_outages(day["outages"]))
+
+
+def day_message(title, day, old):
+    """Change of one day's schedule as (kind, text), or None.
+
+    kind "emergency" -> text is the date; "ended"/"new" -> text is the day block
+    (same-kind entries share one header); "other" -> a complete message.
+    """
+    new_st, old_st = day["status"], old["status"] if old else None
+    date = ddmm(day["date"])
+
+    if is_emergency(new_st):
+        if is_emergency(old_st):
+            return None
+        return "emergency", date
+
+    if new_st == WAITING:
+        if old_st == APPLIES:
+            return "other", f"Графік на {date} скасовано, очікується новий."
+        if is_emergency(old_st):
+            return "other", f"Аварійні відключення на {date} завершено. Новий графік ще не опубліковано."
+        return None
+
+    # new_st == APPLIES
+    if is_emergency(old_st):
+        return "ended", fmt_day(day, title)
+    if old_st != APPLIES:
+        return "new", fmt_day(day, title)
+    if old["outages"] != day["outages"]:
+        return "other", ("<b>Графік змінився</b>\n" + fmt_day(day, title)
+                + "\n\n<i>Було:</i>\n" + "\n".join(fmt_outages(old["outages"])))
+    return None
 
 
 def outage_intervals(days):
-    """Absolute Definite outage intervals across days, merged over midnight."""
+    """Absolute Definite outage intervals of days where the schedule applies, merged over midnight."""
     res = []
     for day in days:
+        if day["status"] != APPLIES:
+            continue
         base = datetime.fromisoformat(day["date"]).replace(tzinfo=TZ)
         for a, b, t in day["outages"]:
             if t != "Definite":
@@ -120,7 +155,7 @@ def main():
         print(f"WARN: fetch failed: {e}")
         return
     if GROUP not in data:
-        sys.exit(f"group {GROUP!r} not found; available: {', '.join(sorted(data))}")
+        sys.exit(f"group {GROUP!r} not found; available: {', '.join(data)}")
     g = data[GROUP]
 
     state = json.loads(STATE_FILE.read_text("utf-8")) if STATE_FILE.exists() else {}
@@ -129,34 +164,38 @@ def main():
     now = datetime.now(TZ)
     today = now.strftime("%Y-%m-%d")
 
-    days = [(t, parse_day(g.get(k))) for k, t in (("today", "Сегодня"), ("tomorrow", "Завтра"))]
+    days = [(t, parse_day(g.get(k))) for k, t in (("today", "Сьогодні"), ("tomorrow", "Завтра"))]
     days = [(t, d) for t, d in days if d]
     messages = []
 
-    # 1. schedule published / changed
-    new_days = {}
+    # 1. schedule published / changed / emergency mode
+    new_days, changes = {}, []
     for title, day in days:
-        snap = {"status": day["status"], "outages": day["outages"]}
-        new_days[day["date"]] = snap
-        old = prev_days.get(day["date"])
-        if old == snap:
-            continue
-        if old is None:
-            messages.append("🗓 <b>График</b>\n" + fmt_day(day, title))
-        else:
-            was = "\n".join(fmt_outages(old["outages"])) if old["status"] == "ScheduleApplies" \
-                else STATUS_TEXT.get(old["status"], old["status"])
-            messages.append("🔄 <b>График изменился</b>\n" + fmt_day(day, title) + "\n\n<i>Было:</i>\n" + was)
+        new_days[day["date"]] = {"status": day["status"], "outages": day["outages"]}
+        change = day_message(title, day, prev_days.get(day["date"]))
+        if change:
+            changes.append(change)
 
-    # 2. reminders before outages
+    def of(kind):
+        return [text for k, text in changes if k == kind]
+
+    if of("emergency"):
+        messages.append(f"<b>Увага: аварійні відключення.</b>\nГрафік на {' і '.join(of('emergency'))} "
+                        f"(група {GROUP}) не діє, світло можуть вимкнути в будь-який час.")
+    if of("ended"):
+        messages.append("<b>Аварійні відключення завершено, графік знову діє.</b>\n\n" + "\n\n".join(of("ended")))
+    if of("new"):
+        messages.append("<b>Графік відключень</b>\n\n" + "\n\n".join(of("new")))
+    messages += of("other")
+
+    # 2. reminders before scheduled outages
     if REMIND_MIN > 0:
         for start, end in outage_intervals([d for _, d in days]):
             key = start.isoformat()
             left = (start - now).total_seconds() / 60
             if 0 < left <= REMIND_MIN and key not in reminded:
                 reminded.append(key)
-                messages.append(f"⏰ Через {round(left)} мин отключение света: "
-                                f"{start:%H:%M}–{end:%H:%M}")
+                messages.append(f"Через {round(left)} хв відключення світла: {start:%H:%M}–{end:%H:%M}")
 
     if messages:
         send("\n\n".join(messages))
