@@ -1,12 +1,9 @@
-import {
-  API, COMMANDS, buildCheck, commandReply, dur, esc, fmtNotice, fmtStatus, kyiv, validateGroup,
-} from "./core.js";
+import { API, COMMANDS, buildCheck, commandReply, dur, esc, kyiv, validateGroup } from "./core.js";
 
-// Secrets: TELEGRAM_BOT_TOKEN, CHAT_ID, GROUP, WEBHOOK_SECRET, RELAY_SECRET
+// Secrets: TELEGRAM_BOT_TOKEN, CHAT_ID, GROUP, WEBHOOK_SECRET, HEALTH_SECRET
 // Optional: ALLOWED_CHATS (comma-separated extra chat ids for commands), REMIND_MINUTES
 //
-// KV keys: state (schedule), dim1557 (1557 answers), health (cron health + alerts),
-// relay_health (written by the 1557 relay), webhook_url, bot_username, email_at
+// KV keys: state (schedule), health (cron health + alerts), webhook_url, bot_username, email_at
 
 const MIN = 60_000;
 
@@ -67,7 +64,7 @@ const changed = (a, b) => JSON.stringify(a) !== JSON.stringify(b);
 // ---------- health ----------
 
 // minutes a problem must last before the chat is told about it
-const DELAY = { yasno_fetch: 60, yasno_format: 10, code: 10, stale: 30, unknown: 0, relay_silent: 0, relay_err: 0, webhook: 0 };
+const DELAY = { yasno_fetch: 60, yasno_format: 10, code: 10, stale: 30, unknown: 0, webhook: 0 };
 
 const RECOVERED = {
   yasno_fetch: "Графік з Yasno знову отримується.",
@@ -75,8 +72,6 @@ const RECOVERED = {
   code: "Перевірка графіка знову працює без помилок.",
   stale: "Yasno знову віддає актуальний графік.",
   unknown: "Yasno знову повертає лише відомі значення.",
-  relay_silent: "Перевірка ДІМ.1557 знову запускається.",
-  relay_err: "Перевірка ДІМ.1557 знову працює.",
   webhook: "Команди бота знову доходять.",
 };
 
@@ -144,16 +139,7 @@ async function check(env) {
     }[yf.kind];
   }
 
-  // 2. ДІМ.1557 relay (GitHub Actions, every 10 min)
-  const rh = (await env.KV.get("relay_health", "json")) || {};
-  const rlast = rh.last || h.created;
-  if (now - rlast > 60 * MIN)
-    active.relay_silent = `ДІМ.1557 не перевірявся вже ${dur(Math.round((now - rlast) / MIN))}. ` +
-      "Ймовірно, зупинився GitHub Actions (вимкнений workflow або збій GitHub).";
-  if (rh.errStreak >= 3)
-    active.relay_err = `Перевірка ДІМ.1557 не вдається ${rh.errStreak} рази поспіль: ${rh.err}`;
-
-  // 3. once an hour (every run while Telegram is failing): is the bot still in the chat,
+  // 2. once an hour (every run while Telegram is failing): is the bot still in the chat,
   //    and is the webhook for commands intact
   if (now - (h.webhookAt || 0) >= 60 * MIN || h.tgFail) {
     h.webhookAt = now;
@@ -184,7 +170,7 @@ async function check(env) {
   }
   if (h.webhookErr) active.webhook = h.webhookErr;
 
-  // 4. tell the chat about new problems and about recoveries
+  // 3. tell the chat about new problems and about recoveries
   for (const [key, msg] of Object.entries(active)) {
     const p = (h.problems[key] ||= { since: now });
     if (!p.alerted && now - p.since >= (DELAY[key] ?? 0) * MIN)
@@ -243,51 +229,8 @@ async function handleUpdate(u, env) {
       console.log("fetch failed:", e.message);
     }
   }
-  const dim = (await env.KV.get("dim1557", "json")) || {};
-  const text = commandReply(cmd, g, env.GROUP, Date.now(), dim.notices || [], dim.status);
+  const text = commandReply(cmd, g, env.GROUP, Date.now());
   if (text) await send(env, msg.chat.id, text);
-}
-
-// ---------- ДІМ.1557 relay ----------
-
-async function relay1557(req, env) {
-  const { messages = [], status = null, error = null } = await req.json();
-
-  const rh = (await env.KV.get("relay_health", "json")) || {};
-  rh.last = Date.now();
-  if (error) {
-    rh.errStreak = (rh.errStreak || 0) + 1;
-    rh.err = String(error).slice(0, 300);
-  } else {
-    rh.errStreak = 0;
-    rh.err = null;
-  }
-  await env.KV.put("relay_health", JSON.stringify(rh));
-  if (error) return Response.json({ recordedError: true, streak: rh.errStreak });
-
-  const st = (await env.KV.get("dim1557", "json")) || { seen: [], notices: [] };
-  const before = JSON.parse(JSON.stringify(st));
-  const first = !st.init; // first sync: remember existing messages without posting them
-  const fresh = messages.filter((m) => !st.seen.includes(m.id)).sort((a, b) => a.id - b.id);
-  for (const m of fresh) {
-    if (!first) await send(env, env.CHAT_ID, fmtNotice(m));
-    st.seen.push(m.id);
-    st.notices.unshift(m);
-  }
-
-  // answer of "Аварії за адресами": post only when it changes (not on the very first one)
-  let statusChanged = false;
-  if (status && status.trim() !== st.status?.text) {
-    const now = Math.floor(Date.now() / 1000);
-    if (st.status) await send(env, env.CHAT_ID, fmtStatus(status.trim(), now));
-    st.status = { text: status.trim(), since: now };
-    statusChanged = true;
-  }
-  st.init = true;
-  st.seen = st.seen.slice(-300);
-  st.notices = st.notices.slice(0, 10);
-  if (changed(st, before)) await env.KV.put("dim1557", JSON.stringify(st));
-  return Response.json({ received: messages.length, sent: first ? 0 : fresh.length, statusChanged });
 }
 
 // ---------- setup ----------
@@ -311,7 +254,7 @@ export default {
 
   async fetch(req, env, ctx) {
     const { pathname, searchParams } = new URL(req.url);
-    const relayAuth = req.headers.get("Authorization") === `Bearer ${env.RELAY_SECRET}`;
+    const healthAuth = req.headers.get("Authorization") === `Bearer ${env.HEALTH_SECRET}`;
     const keyAuth = searchParams.get("key") === env.WEBHOOK_SECRET;
 
     if (req.method === "POST" && pathname === "/telegram") {
@@ -321,12 +264,8 @@ export default {
       ctx.waitUntil(handleUpdate(update, env).catch((e) => console.log("update failed:", e.message)));
       return new Response("ok");
     }
-    if (req.method === "POST" && pathname === "/relay1557") {
-      if (!relayAuth) return new Response("forbidden", { status: 403 });
-      return relay1557(req, env);
-    }
     if (pathname === "/health") {
-      if (!relayAuth) return new Response("forbidden", { status: 403 });
+      if (!healthAuth || !env.HEALTH_SECRET) return new Response("forbidden", { status: 403 });
       return health(env);
     }
     if (pathname === "/setup") {

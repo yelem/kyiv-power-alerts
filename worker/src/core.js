@@ -226,49 +226,25 @@ export function buildCheck(state, g, group, now, remindMin) {
   return { messages, state: { days: newDays, reminded } };
 }
 
-// ---- ДІМ.1557 notices ----
-
-export const fmtNotice = (n) => {
-  const t = kyiv(n.date * 1000);
-  return `<b>ДІМ.1557</b>, ${ddmm(t.date)} ${t.time}\n\n${esc(n.text)}`;
-};
-
-// 1557 answers "...відсутні зафіксовані аварійні ситуації..." when everything is fine
-const noAccidents = (text) => /відсутні\s+зафіксовані/i.test(text);
-
-export function fmtStatus(text, since) {
-  const t = kyiv(since * 1000);
-  const head = noAccidents(text) ? "🟢 ДІМ.1557: аварій за адресою немає" : "🔴 ДІМ.1557: аварія за адресою";
-  return `<b>${head}</b>\n${ddmm(t.date)} ${t.time}\n\n${esc(text)}`;
-}
-
 // ---- commands ----
 
 export const COMMANDS = [
   ["status", "Що зараз за графіком"],
   ["today", "Графік на сьогодні"],
   ["tomorrow", "Графік на завтра"],
-  ["dim1557", "Останні повідомлення ДІМ.1557"],
   ["help", "Довідка"],
 ];
 
 const HELP =
   "<b>Команди</b>\n\n" + COMMANDS.map(([c, d]) => `/${c} – ${d.toLowerCase()}`).join("\n") +
   "\n\nСам бот пише, коли публікується або змінюється графік, коли діють аварійні " +
-  "відключення, за 30 хв до відключення, коли змінюється відповідь ДІМ.1557 " +
-  "і коли в його роботі щось ламається (та коли полагоджено).";
+  "відключення, за 30 хв до відключення і коли в його роботі щось ламається " +
+  "(та коли полагоджено).";
 
 const NODATA = "Не вдалося отримати дані Yasno, спробуйте трохи пізніше.";
 
-export function commandReply(cmd, g, group, now, notices = [], status = null) {
+export function commandReply(cmd, g, group, now) {
   if (cmd === "/help" || cmd === "/start") return HELP;
-  if (cmd === "/dim1557") {
-    const parts = [];
-    if (status) parts.push(fmtStatus(status.text, status.since).replace(/\n/, "\nбез змін з "));
-    else parts.push("ДІМ.1557 ще не перевірявся, перша перевірка – протягом 10 хв.");
-    if (notices.length) parts.push(...notices.slice(0, 2).map(fmtNotice));
-    return parts.join("\n\n— — —\n\n");
-  }
   if (!["/status", "/today", "/tomorrow"].includes(cmd)) return null;
   if (!g) return NODATA;
 
@@ -298,9 +274,5 @@ export function commandReply(cmd, g, group, now, notices = [], status = null) {
       : isEmergency(t.status) ? "На завтра оголошено аварійні відключення."
       : "Графік на завтра: /tomorrow",
   );
-  if (status)
-    lines.push(noAccidents(status.text)
-      ? "ДІМ.1557: аварій за адресою немає"
-      : "ДІМ.1557: є аварія за адресою, деталі /dim1557");
   return lines.join("\n");
 }
