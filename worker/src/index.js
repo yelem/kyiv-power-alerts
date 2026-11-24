@@ -241,8 +241,12 @@ async function setup(req, env) {
   await env.KV.put("bot_username", me.username);
   await env.KV.put("webhook_url", url);
   await setWebhook(env, url);
+  // drop command lists that may exist for narrower scopes, then set the default one
+  for (const scope of [{ type: "all_group_chats" }, { type: "chat", chat_id: env.CHAT_ID }])
+    await tg(env, "deleteMyCommands", { scope });
   await tg(env, "setMyCommands", { commands: COMMANDS.map(([command, description]) => ({ command, description })) });
-  return Response.json({ ok: true, bot: me.username, webhook: url });
+  const commands = (await tg(env, "getMyCommands", {})).map((c) => c.command);
+  return Response.json({ ok: true, bot: me.username, webhook: url, commands });
 }
 
 // ---------- entry points ----------
