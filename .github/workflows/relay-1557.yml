@@ -37,10 +37,18 @@ jobs:
           RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_SECRET: ${{ secrets.RELAY_SECRET }}
 
+      # Fails (and GitHub emails the owner) only for problems the bot can't report in Telegram
+      - name: Health check
+        if: always()
+        run: python relay1557/health.py
+        env:
+          RELAY_URL: ${{ secrets.RELAY_URL }}
+          RELAY_SECRET: ${{ secrets.RELAY_SECRET }}
+
       # GitHub disables scheduled workflows after 60 days without repository activity;
       # re-enabling via the API on every run keeps it alive without commits.
       - name: Keep schedule enabled
-        if: github.event_name == 'schedule'
+        if: always() && github.event_name == 'schedule'
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/relay-1557.yml/enable"
         env:
           GH_TOKEN: ${{ github.token }}

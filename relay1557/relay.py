@@ -6,6 +6,9 @@ result to the worker, which posts changes to the family chat.
 and deletes the service messages afterwards. Unsolicited bot messages, if any ever
 come, are relayed too.
 
+Errors are reported to the worker (it alerts the chat after several failures in a row)
+instead of failing the job, so GitHub doesn't send an email every 10 minutes.
+
 Env: TG_API_ID, TG_API_HASH, TG_SESSION (from login.py), RELAY_URL, RELAY_SECRET,
      DIM1557_ADDRESS (optional: part of the address button text if there are several)
 
@@ -13,7 +16,6 @@ Nothing about the address or the answers is printed: Actions logs of a public re
 """
 import json
 import os
-import sys
 import time
 import urllib.request
 
@@ -27,6 +29,10 @@ ADDRESS = os.environ.get("DIM1557_ADDRESS", "").strip().lower()
 # Bot messages within this many seconds after our own message are replies to our
 # requests, not notices, so they are not relayed as notices.
 SOLICITED_WINDOW = 600
+
+
+class Failure(Exception):
+    """Expected failure with a human-readable (Ukrainian) reason for the chat."""
 
 
 def wait_for(client, after_id, pred, timeout=20):
@@ -58,28 +64,23 @@ def query_status(client, ids):
         ids.append(m.id)
         kb = wait_for(client, m.id, lambda x: isinstance(x.reply_markup, ReplyKeyboardMarkup))
         if not kb:
-            print("no menu keyboard")
-            return None
+            raise Failure("1557 не показав меню у відповідь на /menu")
         ids.append(kb.id)
         text = menu_button_text(client)
         if not text:
-            print("menu button not found")
-            return None
+            raise Failure(f"у меню 1557 немає кнопки «{MENU_BUTTON}»")
 
     start = client.send_message(BOT, text)
     ids.append(start.id)
     picker = wait_for(client, start.id, lambda x: bool(x.buttons))
     if not picker:
-        print("no address picker")
-        return None
+        raise Failure("1557 не запропонував вибрати адресу")
     ids.append(picker.id)
     buttons = [b for row in picker.buttons for b in row if "Назад" not in b.text]
     if ADDRESS:
         buttons = [b for b in buttons if ADDRESS in b.text.lower()]
     if not buttons:
-        print("address button not found")
-        return None
-    print(f"address buttons: {len(buttons)}")
+        raise Failure("у 1557 не знайдено кнопку з адресою (можливо, адресу видалено з профілю)")
     buttons[0].click()
 
     # the answer comes as a new message or as an edit of the picker
@@ -92,47 +93,61 @@ def query_status(client, ids):
             if m.id not in ids:
                 ids.append(m.id)
             if m.message and not m.message.startswith("Оберіть адресу"):
+                if "адрес" not in m.message.lower():
+                    raise Failure("1557 відповів у незнайомому форматі, можливо, змінилося меню")
                 return m.message
-    print("no answer after click")
-    return None
+    raise Failure("1557 не відповів після вибору адреси")
 
 
-client = TelegramClient(StringSession(os.environ["TG_SESSION"]),
-                        int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
-client.connect()
-try:
-    if not client.is_user_authorized():
-        sys.exit("Telegram session is no longer valid, run relay1557/login.py again")
-
-    msgs = client.get_messages(BOT, limit=30)
-    ours = [m.date for m in msgs if m.out]
-    notices = [
-        {"id": m.id, "date": int(m.date.timestamp()), "text": m.message}
-        for m in msgs
-        if not m.out and m.message
-        and not any(0 <= (m.date - t).total_seconds() <= SOLICITED_WINDOW for t in ours)
-    ]
-
-    service_ids = []
+def run():
+    client = TelegramClient(StringSession(os.environ["TG_SESSION"]),
+                            int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
+    client.connect()
     try:
-        status = query_status(client, service_ids)
+        if not client.is_user_authorized():
+            raise Failure("сесія Telegram недійсна (завершена в «Пристроях» або Telegram її скинув), "
+                          "потрібно заново запустити relay1557/login.py")
+        msgs = client.get_messages(BOT, limit=30)
+        ours = [m.date for m in msgs if m.out]
+        notices = [
+            {"id": m.id, "date": int(m.date.timestamp()), "text": m.message}
+            for m in msgs
+            if not m.out and m.message
+            and not any(0 <= (m.date - t).total_seconds() <= SOLICITED_WINDOW for t in ours)
+        ]
+        service_ids = []
+        try:
+            status = query_status(client, service_ids)
+        finally:
+            if service_ids:
+                client.delete_messages(BOT, service_ids, revoke=True)
+        print(f"ok, service messages deleted: {len(service_ids)}")
+        return {"messages": notices, "status": status}
     finally:
-        if service_ids:
-            client.delete_messages(BOT, service_ids, revoke=True)
-finally:
-    client.disconnect()
+        client.disconnect()
 
-print(f"status: {'ok' if status else 'none'}, service messages deleted: {len(service_ids)}")
 
-req = urllib.request.Request(
-    os.environ["RELAY_URL"],
-    data=json.dumps({"messages": notices, "status": status}).encode(),
-    headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {os.environ['RELAY_SECRET']}",
-        # Cloudflare rejects the default "Python-urllib" user agent (error 1010)
-        "User-Agent": "kyiv-power-alerts-relay",
-    },
-)
-with urllib.request.urlopen(req, timeout=30) as r:
-    print(r.read().decode())
+def post(payload):
+    req = urllib.request.Request(
+        os.environ["RELAY_URL"],
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.environ['RELAY_SECRET']}",
+            # Cloudflare rejects the default "Python-urllib" user agent (error 1010)
+            "User-Agent": "kyiv-power-alerts-relay",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        print(r.read().decode())
+
+
+try:
+    payload = run()
+except Failure as e:
+    print("failure reported to the worker")
+    payload = {"error": str(e)}
+except Exception as e:  # unexpected: only the type goes to the public log
+    print(f"error reported to the worker: {type(e).__name__}")
+    payload = {"error": f"{type(e).__name__}: {e}"[:300]}
+post(payload)

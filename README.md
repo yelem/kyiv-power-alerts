@@ -36,6 +36,26 @@ GitHub Actions  (relay1557/, every 10 min)
 Schedule data: `https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages`
 (unofficial API, may change without notice).
 
+## Failure monitoring
+
+The bot reports its own problems to the chat once when they start and once when they
+are fixed:
+
+| Problem | Reported after |
+|---|---|
+| Yasno unreachable / HTTP errors | 60 min |
+| Yasno data in an unexpected format, or a bug while processing it | 10 min |
+| Unknown status or interval type in Yasno data | at once |
+| Yasno serves yesterday's schedule | 30 min |
+| ДІМ.1557 check failing (session revoked, menu changed, no answer) | 3 runs in a row |
+| ДІМ.1557 check not running at all (GitHub Actions stopped) | 60 min |
+| Command webhook broken or repeatedly reset (reset once is repaired silently) | hourly check |
+
+Problems the bot can't post to Telegram itself — the worker's scheduled check stopped,
+or Telegram rejects the bot (token revoked, bot removed from the chat) — make the
+`relay-1557` workflow fail, so GitHub emails the repository owner (at most once per
+6 hours per problem). If the worker is unreachable at all, every run fails.
+
 ## Setup
 
 ### Worker

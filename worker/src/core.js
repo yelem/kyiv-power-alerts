@@ -56,6 +56,39 @@ export function dur(min) {
   return h ? `${h} год` : `${m} хв`;
 }
 
+const KNOWN_STATUS = [APPLIES, WAITING, "EmergencyShutdowns"];
+const KNOWN_SLOT = ["NotPlanned", "Definite"];
+
+/**
+ * Sanity check of one group's data. `errors`: the data can't be used at all;
+ * `unknown`: values we don't know (still shown, but maybe not correctly).
+ */
+export function validateGroup(g) {
+  const errors = [], unknown = new Set();
+  for (const k of ["today", "tomorrow"]) {
+    const d = g[k];
+    if (d == null) {
+      if (k === "today") errors.push("немає графіка на сьогодні");
+      continue;
+    }
+    if (typeof d.date !== "string" || Number.isNaN(Date.parse(d.date))) errors.push(`${k}: некоректна дата`);
+    if (!Array.isArray(d.slots)) {
+      errors.push(`${k}: немає слотів`);
+      continue;
+    }
+    for (const s of d.slots) {
+      const okRange = Number.isInteger(s?.start) && Number.isInteger(s?.end) && s.start >= 0 && s.end <= 1440 && s.start < s.end;
+      if (!okRange) {
+        errors.push(`${k}: некоректний інтервал`);
+        break;
+      }
+      if (!KNOWN_SLOT.includes(s.type)) unknown.add(`тип інтервалу «${s.type}»`);
+    }
+    if (d.status != null && !KNOWN_STATUS.includes(d.status)) unknown.add(`статус «${d.status}»`);
+  }
+  return { errors, unknown: [...unknown] };
+}
+
 export function parseDay(d) {
   if (!d || !d.date) return null;
   const outages = [];
@@ -222,7 +255,8 @@ export const COMMANDS = [
 const HELP =
   "<b>Команди</b>\n\n" + COMMANDS.map(([c, d]) => `/${c} – ${d.toLowerCase()}`).join("\n") +
   "\n\nСам бот пише, коли публікується або змінюється графік, коли діють аварійні " +
-  "відключення, за 30 хв до відключення та коли приходить повідомлення від ДІМ.1557.";
+  "відключення, за 30 хв до відключення, коли змінюється відповідь ДІМ.1557 " +
+  "і коли в його роботі щось ламається (та коли полагоджено).";
 
 const NODATA = "Не вдалося отримати дані Yasno, спробуйте трохи пізніше.";
 
