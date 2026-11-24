@@ -1,0 +1,43 @@
+name: relay-1557
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write # to keep the schedule enabled, see the last step
+
+concurrency:
+  group: relay-1557
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install telethon==1.43.2
+
+      - name: Relay new 1557 messages
+        run: python relay1557/relay.py
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION: ${{ secrets.TG_SESSION }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
+          RELAY_SECRET: ${{ secrets.RELAY_SECRET }}
+
+      # GitHub disables scheduled workflows after 60 days without repository activity;
+      # re-enabling via the API on every run keeps it alive without commits.
+      - name: Keep schedule enabled
+        if: github.event_name == 'schedule'
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/relay-1557.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
