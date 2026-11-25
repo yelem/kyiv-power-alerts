@@ -215,7 +215,8 @@ export function buildCheck(state, g, group, now, remindMin) {
     messages.push("<b>Аварійні відключення завершено, графік знову діє</b>\n\n" + ch.ended.join("\n\n"));
   messages.push(...ch.fresh, ...ch.other);
 
-  let reminded = state.reminded || [];
+  // copy: pushing into state.reminded would make the caller's change check see no change
+  let reminded = [...(state.reminded || [])];
   if (remindMin > 0) {
     for (const [s, e] of intervals(days)) {
       const key = new Date(s).toISOString();
